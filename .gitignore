@@ -1,0 +1,12 @@
+.DS_Store
+*.swp
+Metal_ScreenFillingTest/Metal_ScreenFillingTest.xcodeproj/project.xcworkspace/
+Metal_ScreenFillingTest/Metal_ScreenFillingTest.xcodeproj/xcuserdata/*
+Metal_ScreenFillingTest/Metal_ScreenFillingTest.xcworkspace/
+
+Metal_ScreenFillingTest.xcodeproj/xcuserdata/*
+Metal_ScreenFillingTest.xcworkspace/
+
+Metal_ScreenFillingTestTests/*
+Metal_ScreenFillingTest/Build/*
+
