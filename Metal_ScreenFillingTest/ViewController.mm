@@ -40,8 +40,12 @@
 {
     [super viewDidLoad];
     
+    _displaySemaphore = dispatch_semaphore_create(1);
+    
+#define TEST_TYPE 0
+    
     [self setupMetal];
-    [self prepareAssetsForTestType:1];
+    [self prepareAssetsForTestType:TEST_TYPE];
     
     _timer = [CADisplayLink displayLinkWithTarget:self selector:@selector(render)];
     [_timer addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSDefaultRunLoopMode];
@@ -87,40 +91,23 @@
 
 - (void) prepareAssetsForTestType:(NSUInteger) testType
 {
-    static const vector_float4 vertices[] = {
-        { 0.0, 1.0, 0.0, 1.0 },
-        { 1.0, 1.0, 0.0, 1.0 },
-        { 1.0, 0.0, 0.0, 1.0 },
-        { 0.0, 0.0, 0.0, 1.0 },
-    };
-    
-    _vertexBuffer = [_device newBufferWithBytes:vertices
-                                         length:sizeof(vertices)
+    std::vector<vector_float4> vertices = [self verticesForTestType:testType];
+   
+    _vertexBuffer = [_device newBufferWithBytes:&vertices.front()
+                                         length:sizeof(vector_float4) * vertices.size()
                                         options:MTLResourceOptionCPUCacheModeDefault];
     
     [_vertexBuffer setLabel:@"vertices"];
     
     //
     
-    static const uint16_t indices[] = {
-        0, 1, 3, 1, 2, 3
-    };
+    std::vector<uint32_t> indices = [self indicesForTestType:testType];
     
-    _indexBuffer = [_device newBufferWithBytes:indices
-                                        length:sizeof(indices)
+    _indexBuffer = [_device newBufferWithBytes:&indices.front()
+                                        length:sizeof(uint32_t) * indices.size()
                                        options:MTLResourceOptionCPUCacheModeDefault];
     
     [_indexBuffer setLabel:@"indices"];
-    
-    //
-    
-    std::vector<matrix_float4x4> modelMatrices = [self modelMatricesForTestType:testType];
-    
-    _modelMatricesBuffer = [_device newBufferWithBytes:&modelMatrices.front()
-                                                length:sizeof(matrix_float4x4) * modelMatrices.size()
-                                               options:MTLResourceOptionCPUCacheModeDefault];
-    
-    [_modelMatricesBuffer setLabel:@"modelMatrices"];
     
     //
     
@@ -157,22 +144,25 @@
     [commandEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
     [commandEncoder setVertexBuffer:_projectionMatrixBuffer offset:0 atIndex:1];
     
-    [commandEncoder pushDebugGroup:@"Render Meshes"];
+    [commandEncoder pushDebugGroup:@"Rendering"];
     
-    const NSUInteger numberOfItems = [_modelMatricesBuffer length] / sizeof(matrix_float4x4);
+#if TEST_TYPE == 0
     
-    for (NSUInteger i = 0; i < numberOfItems; ++i) {
-        
-        [commandEncoder setVertexBuffer:_modelMatricesBuffer offset:i*sizeof(matrix_float4x4) atIndex:2];
-        
-        [commandEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                   indexCount:[_indexBuffer length] / sizeof(uint16_t)
-                                    indexType:MTLIndexTypeUInt16
-                                  indexBuffer:_indexBuffer
-                            indexBufferOffset:0];
-    }
+    [commandEncoder drawIndexedPrimitives:MTLPrimitiveTypePoint
+                               indexCount:[_indexBuffer length] / sizeof(uint32_t)
+                                indexType:MTLIndexTypeUInt32
+                              indexBuffer:_indexBuffer
+                        indexBufferOffset:0];
+    
+#else 
+     [commandEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                               indexCount:[_indexBuffer length] / sizeof(uint32_t)
+                                indexType:MTLIndexTypeUInt32
+                              indexBuffer:_indexBuffer
+                        indexBufferOffset:0];   
+#endif
 
-    [commandEncoder pushDebugGroup:@"Render Meshes"];
+    [commandEncoder pushDebugGroup:@"Rendering"];
     
     [commandEncoder endEncoding];
     
@@ -195,41 +185,13 @@
     return AAPL::ortho2d_oc(0, screenSize.width, 0, screenSize.height, 0, 1);
 }
 
-- (std::vector<matrix_float4x4>) modelMatricesForTestType:(NSUInteger) type
-{
-    const CGSize screenSize = [self sizeOfScreen];
-    const CGSize particleSize = [self sizeOfQuadsForTestType:type];
-    const NSUInteger numberOfItems = [self numberOfQuadsForScreenSize:screenSize andTestType:type];
-    
-    std::vector<matrix_float4x4> modelMatrices;
-    
-    NSUInteger xCoord = 0;
-    NSUInteger yCoord = screenSize.height - particleSize.height;
-    
-    for (NSUInteger i = 0; i < numberOfItems; ++i) {
-        
-        matrix_float4x4 modelMatrix = matrix_identity_float4x4;
-        modelMatrix = modelMatrix * AAPL::translate(xCoord, yCoord, 0);
-        modelMatrix = modelMatrix * AAPL::scale(particleSize.width, particleSize.height, 0);
-        
-        modelMatrices.push_back(modelMatrix);
-        
-        xCoord += particleSize.width;
-        if ((xCoord + particleSize.width) > screenSize.width) {
-            xCoord = 0;
-            yCoord -= particleSize.height;
-        }
-    }
 
-    return modelMatrices;
-}
-
-- (NSUInteger) numberOfQuadsForScreenSize:(CGSize) screenSize andTestType:(NSUInteger) type
+- (NSUInteger) numberOfVerticesForScreenSize:(CGSize) screenSize andTestType:(NSUInteger) type
 {
     NSUInteger numberOfRows = screenSize.width / [self sizeOfQuadsForTestType:type].width;
     NSUInteger numberOfColumns = screenSize.height / [self sizeOfQuadsForTestType:type].height;
     
-    return (numberOfRows * numberOfColumns);
+    return ++numberOfRows * ++numberOfColumns;
 }
 
 - (CGSize) sizeOfQuadsForTestType:(NSUInteger) type
@@ -249,7 +211,100 @@
     CGRect screenBounds = [[UIScreen mainScreen] bounds];
     CGFloat screenScale = [[UIScreen mainScreen] scale];
     
-    return CGSizeMake(screenBounds.size.width * screenScale, screenBounds.size.height * screenScale);
+    return CGSizeMake(screenBounds.size.width * screenScale , screenBounds.size.height * screenScale);
+}
+
+#pragma mark -
+#pragma mark Vertices 
+
+- (std::vector<vector_float4>) verticesForTestType:(NSUInteger) type
+{
+    std::vector<vector_float4> vertices;
+    
+    const CGSize screenSize = [self sizeOfScreen];
+    const NSUInteger numberOfVertices= [self numberOfVerticesForScreenSize:screenSize andTestType:type];
+    const CGSize particleSize = [self sizeOfQuadsForTestType:type];
+    
+    // position coordinates
+    float xCoord = 0;
+    float yCoord = 0;
+    
+    for (NSUInteger i = 0; i < numberOfVertices; ++i) {
+        
+        vector_float4 newVertex = { xCoord, yCoord, 0.0, 1.0 };
+        
+        vertices.push_back(newVertex);
+        
+        xCoord += (float) particleSize.width;
+        if (xCoord > screenSize.width) {
+            xCoord = 0.f;
+            yCoord += (float) particleSize.height;
+        }
+    }
+    
+    NSLog(@"Number of vertices %lu", vertices.size());
+    
+    return vertices;
+}
+
+#pragma mark -
+#pragma mark Indices
+
+- (std::vector<uint32_t>) indicesForTestType:(NSUInteger) type
+{
+    if (type == 1 || type == 2) {
+        return [self triangleIndicesForTestType:type];
+    } else {
+        return [self pointIndices];
+    }
+}
+
+- (std::vector<uint32_t>) pointIndices // indicesForTestType - 0
+{
+    std::vector<uint32_t> indices;
+    
+    const CGSize screenSize = [self sizeOfScreen];
+    const uint32_t numberOfVertices = (uint32_t) [self numberOfVerticesForScreenSize:screenSize andTestType:0];
+    
+    for (NSUInteger i = 0; i < numberOfVertices; ++i) {
+        indices.push_back((uint32_t) i);
+    }
+    
+    NSLog(@"Number of indices %lu", indices.size());
+    
+    return indices;
+}
+
+- (std::vector<uint32_t>) triangleIndicesForTestType:(NSUInteger) type
+{
+    std::vector<uint32_t> indices;
+    
+    const CGSize screenSize = [self sizeOfScreen];
+    const uint32_t numberOfVertices = (uint32_t) [self numberOfVerticesForScreenSize:screenSize andTestType:type];
+    const CGSize particleSize = [self sizeOfQuadsForTestType:type];
+    
+    const uint32_t verticesPerRow = (screenSize.width / particleSize.width) + 1;
+    
+    for (NSUInteger i = 0; i < (numberOfVertices - verticesPerRow); ++i) {
+        
+        if (((i + 1) % verticesPerRow) == 0) {
+            continue;
+        }
+        
+        // first triangle
+        indices.push_back((uint32_t) i + verticesPerRow);
+        indices.push_back((uint32_t) i + 1 + verticesPerRow);
+        indices.push_back((uint32_t) i);
+        
+        // second triangle
+        indices.push_back((uint32_t) i+1+verticesPerRow);
+        indices.push_back((uint32_t) i+1);
+        indices.push_back((uint32_t) i);
+    }
+    
+    NSLog(@"Number of indices %lu", indices.size());
+    
+    return indices;
 }
 
 @end

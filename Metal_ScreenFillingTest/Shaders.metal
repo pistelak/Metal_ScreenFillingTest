@@ -14,23 +14,17 @@ struct Vertex
     float4 position [[position]];
 };
 
-struct ModelViewMatrix
-{
-    float4x4 modelViewMatrix;
-};
-
-struct ProjectionMatrix
+struct Uniforms
 {
     float4x4 projectionMatrix;
 };
 
 vertex Vertex vertexFunction(device Vertex *vertices [[buffer(0)]],
-                             constant ProjectionMatrix * projection [[buffer(1)]],
-                             constant ModelViewMatrix * modelView [[buffer(2)]],
+                             constant Uniforms * uniforms [[buffer(1)]],
                              uint vid [[vertex_id]])
 {
     Vertex vertexOut;
-    vertexOut.position = projection->projectionMatrix * modelView->modelViewMatrix * vertices[vid].position;
+    vertexOut.position = uniforms->projectionMatrix * vertices[vid].position;
     
     return vertexOut;
 }
