@@ -26,7 +26,6 @@
     id<MTLBuffer> _vertexBuffer;
     id<MTLBuffer> _indexBuffer;
     id<MTLBuffer> _projectionMatrixBuffer;
-    id<MTLBuffer> _modelMatricesBuffer;
     
     dispatch_semaphore_t _displaySemaphore;
     
@@ -40,8 +39,6 @@
 {
     [super viewDidLoad];
     
-    _displaySemaphore = dispatch_semaphore_create(1);
-    
 #define TEST_TYPE 0
     
     [self setupMetal];
@@ -51,14 +48,28 @@
     [_timer addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSDefaultRunLoopMode];
     
     _metalLayer = (CAMetalLayer *) [self.view layer];
+    _metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    _metalLayer.framebufferOnly = YES;
 }
 
+- (void) viewDidLayoutSubviews
+{
+    [super viewDidLayoutSubviews];
+    
+    UIWindow *window = self.view.window;
+    CGFloat scale = window.screen.nativeScale;
+    CGSize layerSize = window.bounds.size;
+    
+    _metalLayer.frame = CGRectMake(0, 0, layerSize.width, layerSize.height);
+    _metalLayer.drawableSize = CGSizeMake(layerSize.width * scale, layerSize.height * scale);
+}
 
 - (void) setupMetal
 {
     _device = MTLCreateSystemDefaultDevice();
     _metalLayer.device = _device;
-    _metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+   
+    self.view.contentScaleFactor = self.view.window.screen.nativeScale;
     
     if (!_device) {
         NSLog(@"Error occurred when creating device");
@@ -77,7 +88,11 @@
     }
     
     MTLRenderPipelineDescriptor *pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
+#if TEST_TYPE == 0
+    pipelineDescriptor.vertexFunction = [_library newFunctionWithName:@"vertexFunctionForPoints"];
+#else
     pipelineDescriptor.vertexFunction = [_library newFunctionWithName:@"vertexFunction"];
+#endif
     pipelineDescriptor.fragmentFunction = [_library newFunctionWithName:@"fragmentFunction"];
     pipelineDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
     
@@ -91,7 +106,7 @@
 
 - (void) prepareAssetsForTestType:(NSUInteger) testType
 {
-    std::vector<vector_float4> vertices = [self verticesForTestType:testType];
+    static const std::vector<vector_float4> vertices = [self verticesForTestType:testType];
    
     _vertexBuffer = [_device newBufferWithBytes:&vertices.front()
                                          length:sizeof(vector_float4) * vertices.size()
@@ -101,7 +116,7 @@
     
     //
     
-    std::vector<uint32_t> indices = [self indicesForTestType:testType];
+    static const std::vector<uint32_t> indices = [self indicesForTestType:testType];
     
     _indexBuffer = [_device newBufferWithBytes:&indices.front()
                                         length:sizeof(uint32_t) * indices.size()
@@ -111,7 +126,7 @@
     
     //
     
-    const matrix_float4x4 projectionMatrix = [self projectionMatrix];
+    static const matrix_float4x4 projectionMatrix = [self projectionMatrix];
     
     _projectionMatrixBuffer = [_device newBufferWithBytes:&projectionMatrix
                                           length:sizeof(matrix_float4x4)
@@ -122,58 +137,51 @@
 
 - (void) render
 {
-    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
-    
     id<CAMetalDrawable> drawable = [_metalLayer nextDrawable];
+    id<MTLTexture> framebufferTexture = [drawable texture];
     
-    __block CFTimeInterval previousTimestamp = CFAbsoluteTimeGetCurrent();
-    
-    MTLRenderPassDescriptor *passDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
-    passDescriptor.colorAttachments[0].texture = drawable.texture;
-    passDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0, 104.f/255.f, 55.f/255.f, 1.f);
-    passDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
-    passDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
-    
-    id<MTLRenderCommandEncoder> commandEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
-    
-    CGSize sizeOfScreen = [self sizeOfScreen];
-    
-    [commandEncoder setRenderPipelineState:_renderPipelineState];
-    [commandEncoder setViewport: { 0, 0, sizeOfScreen.width, sizeOfScreen.height, 0, 1 }];
-    
-    [commandEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
-    [commandEncoder setVertexBuffer:_projectionMatrixBuffer offset:0 atIndex:1];
-    
-    [commandEncoder pushDebugGroup:@"Rendering"];
-    
+    if (drawable)
+    {
+        MTLRenderPassDescriptor *passDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
+        passDescriptor.colorAttachments[0].texture = framebufferTexture;
+        passDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0, 104.f/255.f, 55.f/255.f, 1.f);
+        passDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+        passDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
+        
+        id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+        
+        id<MTLRenderCommandEncoder> commandEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
+        [commandEncoder setRenderPipelineState:_renderPipelineState];
+        [commandEncoder setViewport: { 0, 0, self.sizeOfScreen.width, self.sizeOfScreen.height }];
+        
+        [commandEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
+        [commandEncoder setVertexBuffer:_projectionMatrixBuffer offset:0 atIndex:1];
+        
+        [commandEncoder pushDebugGroup:@"Rendering"];
+        
 #if TEST_TYPE == 0
-    
-    [commandEncoder drawIndexedPrimitives:MTLPrimitiveTypePoint
-                               indexCount:[_indexBuffer length] / sizeof(uint32_t)
-                                indexType:MTLIndexTypeUInt32
-                              indexBuffer:_indexBuffer
-                        indexBufferOffset:0];
-    
-#else 
-     [commandEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                               indexCount:[_indexBuffer length] / sizeof(uint32_t)
-                                indexType:MTLIndexTypeUInt32
-                              indexBuffer:_indexBuffer
-                        indexBufferOffset:0];   
+        
+        [commandEncoder drawIndexedPrimitives:MTLPrimitiveTypePoint
+                                   indexCount:[_indexBuffer length] / sizeof(uint32_t)
+                                    indexType:MTLIndexTypeUInt32
+                                  indexBuffer:_indexBuffer
+                            indexBufferOffset:0];
+        
+#else
+        [commandEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                   indexCount:[_indexBuffer length] / sizeof(uint32_t)
+                                    indexType:MTLIndexTypeUInt32
+                                  indexBuffer:_indexBuffer
+                            indexBufferOffset:0];
 #endif
-
-    [commandEncoder pushDebugGroup:@"Rendering"];
-    
-    [commandEncoder endEncoding];
-    
-    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull buffer) {
-        CFTimeInterval frameDuration = CFAbsoluteTimeGetCurrent() - previousTimestamp;
-        NSLog(@"Frame duration: %f ms", frameDuration * 1000.0);
-    }];
-    
-    
-    [commandBuffer presentDrawable:drawable];
-    [commandBuffer commit];
+        
+        [commandEncoder pushDebugGroup:@"Rendering"];
+        
+        [commandEncoder endEncoding];
+        
+        [commandBuffer presentDrawable:drawable];
+        [commandBuffer commit];
+    } 
 }
 
 #pragma mark -
@@ -184,7 +192,6 @@
     const CGSize screenSize = [self sizeOfScreen];
     return AAPL::ortho2d_oc(0, screenSize.width, 0, screenSize.height, 0, 1);
 }
-
 
 - (NSUInteger) numberOfVerticesForScreenSize:(CGSize) screenSize andTestType:(NSUInteger) type
 {

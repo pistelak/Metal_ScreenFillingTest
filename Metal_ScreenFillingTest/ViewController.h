@@ -14,7 +14,5 @@
 
 @property (nonatomic, strong) View *view;
 
-@property (strong) dispatch_semaphore_t displaySemaphore;
-
 @end
 
